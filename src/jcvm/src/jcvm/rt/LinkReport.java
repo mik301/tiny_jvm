@@ -63,7 +63,7 @@ public final class LinkReport {
             if (key == null) {
                 seenUnknown.add(ac.name + "  " + (virtual ? "virtual" : "static")
                         + " token " + e.token);
-            } else if (!vm.natives.has(key)) {
+            } else if (vm.natives.resolve(key) == null) {
                 seenMissing.add(key);
             }
         }

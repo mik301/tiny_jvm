@@ -30,6 +30,7 @@ public final class CardManager {
     private static final int P1_FOR_EXTRADITION = 0x10;
     private static final int P1_FOR_REGISTRY_UPDATE = 0x20;
     private static final int P1_FOR_PERSONALIZATION = 0x40;
+    private static final int P1_MORE_COMMANDS = 0x80;
 
     /* status words */
     private static final int SW_OK = 0x9000;
@@ -136,6 +137,7 @@ public final class CardManager {
             }
         } catch (GpException e) {
             card.lastError = e;
+            card.log("-> " + e.getMessage());
             return sw(e.statusWord);
         } catch (RuntimeException e) {
             card.lastError = e;
@@ -169,7 +171,16 @@ public final class CardManager {
     /* ---------------- INSTALL ---------------- */
 
     private byte[] install(byte[] c) {
-        int p1 = c[2] & 0xFF;
+        int rawP1 = c[2] & 0xFF;
+        // Bit 8 of P1 means "more INSTALL commands follow"; it is not a variant,
+        // so 84 is still [for install] and 8C still [for install and make
+        // selectable]. Mask it off before deciding what to do.
+        boolean moreCommands = (rawP1 & P1_MORE_COMMANDS) != 0;
+        int p1 = rawP1 & ~P1_MORE_COMMANDS;
+        if (moreCommands) {
+            card.log("INSTALL P1=" + String.format("%02X", Integer.valueOf(rawP1))
+                    + ": more INSTALL commands follow");
+        }
         byte[] data = body(c);
         Tlv in = new Tlv(data);
 
@@ -236,12 +247,24 @@ public final class CardManager {
             } catch (RuntimeException e) {
                 card.lastError = e;
                 throw new GpException(SW_CONDITIONS,
-                        "the applet's install() failed: " + e);
+                        "the applet's install() failed: " + e, e);
             } finally {
                 card.pendingToolkitParams = null;
             }
             boolean selectable = (p1 & P1_FOR_MAKE_SELECTABLE) != 0;
-            registry.addApplication(created.aid, elfAid, priv, selectable);
+            GpRegistry.Entry entry = registry.find(created.aid);
+            if (entry == null) {
+                entry = registry.addApplication(created.aid, elfAid, priv, selectable);
+            } else {
+                entry.privileges = priv;
+                entry.elfAid = elfAid;
+                entry.lifeCycle = selectable
+                        ? GpRegistry.APP_SELECTABLE : GpRegistry.APP_INSTALLED;
+            }
+            if (!java.util.Arrays.equals(created.aid, instanceAid)) {
+                card.log("  note: the applet registered as " + Hex.toHex(created.aid)
+                        + " rather than the requested " + Hex.toHex(instanceAid));
+            }
 
             // GP echoes the installed application AID
             ByteArrayOutputStream r = new ByteArrayOutputStream();
@@ -368,18 +391,13 @@ public final class CardManager {
             throw new GpException(SW_NOT_ENOUGH_MEMORY, "load failed: " + e);
         }
 
-        byte[] elfAid = pendingElfAid != null ? pendingElfAid : pkg.aid;
-        if (!java.util.Arrays.equals(elfAid, pkg.aid)) {
-            card.log("  note: INSTALL [for load] declared " + Hex.toHex(elfAid)
+        if (pendingElfAid != null && !java.util.Arrays.equals(pendingElfAid, pkg.aid)) {
+            card.log("  note: INSTALL [for load] declared " + Hex.toHex(pendingElfAid)
                     + " but the CAP's package AID is " + Hex.toHex(pkg.aid));
-            elfAid = pkg.aid;
         }
-        GpRegistry.Entry elf = registry.addElf(elfAid);
+        // The JCRE registered the load file and its modules as it linked them.
         for (int i = 0; i < pkg.cap.applets.size(); i++) {
-            byte[] moduleAid = pkg.cap.applets.get(i).aid;
-            elf.modules.add(moduleAid);
-            registry.addModule(moduleAid, elfAid);
-            card.log("  module " + Hex.toHex(moduleAid));
+            card.log("  module " + Hex.toHex(pkg.cap.applets.get(i).aid));
         }
         pendingElfAid = null;
         return sw(SW_OK);
@@ -436,66 +454,75 @@ public final class CardManager {
             throw new GpException(SW_WRONG_DATA,
                     "DELETE needs a 4F AID, or D0/D2 for a key");
         }
+
+        // Ask the JCRE what really exists rather than trusting the registry
+        // alone, so an entry that got out of step is still deletable.
         GpRegistry.Entry e = registry.find(target);
-        if (e == null) {
-            throw new GpException(SW_REFERENCED_DATA_NOT_FOUND,
-                    "nothing on the card with AID " + Hex.toHex(target));
+        AppletInstance instance = card.findApplet(target);
+        LoadedPackage pkg = card.findLoaded(target);
+
+        if (e != null && e.type == GpRegistry.TYPE_ISD) {
+            throw new GpException(SW_CONDITIONS, "the ISD cannot be deleted");
         }
-
-        switch (e.type) {
-            case GpRegistry.TYPE_ISD:
-                throw new GpException(SW_CONDITIONS, "the ISD cannot be deleted");
-
-            case GpRegistry.TYPE_MODULE:
-                throw new GpException(SW_CONDITIONS,
-                        "an executable module is deleted with its load file, not on"
-                        + " its own - delete " + Hex.toHex(e.elfAid) + " instead");
-
-            case GpRegistry.TYPE_APPLICATION:
-                return deleteApplication(e);
-
-            default:
-                return deleteLoadFile(e, cascade);
+        if (instance != null) {
+            return deleteApplication(target);
         }
+        if (pkg != null || (e != null && e.type == GpRegistry.TYPE_ELF)) {
+            return deleteLoadFile(target, cascade);
+        }
+        if (e != null && e.type == GpRegistry.TYPE_MODULE) {
+            throw new GpException(SW_CONDITIONS,
+                    "an executable module is deleted with its load file, not on"
+                    + " its own - delete " + Hex.toHex(e.elfAid) + " instead");
+        }
+        if (e != null) {
+            registry.remove(target);       // a stale entry, drop it
+            return sw(SW_OK);
+        }
+        throw new GpException(SW_REFERENCED_DATA_NOT_FOUND,
+                "nothing on the card with AID " + Hex.toHex(target));
     }
 
-    private byte[] deleteApplication(GpRegistry.Entry e) {
-        card.deleteApplet(e.aid);
-        registry.remove(e.aid);
-        card.log("DELETE application " + Hex.toHex(e.aid));
+    private byte[] deleteApplication(byte[] aid) {
+        card.deleteApplet(aid);            // also clears the registry entry
+        registry.remove(aid);
+        card.log("DELETE application " + Hex.toHex(aid));
         return sw(SW_OK);
     }
 
-    private byte[] deleteLoadFile(GpRegistry.Entry elf, boolean cascade) {
-        List<GpRegistry.Entry> apps = registry.applicationsOf(elf.aid);
+    private byte[] deleteLoadFile(byte[] elfAid, boolean cascade) {
+        // Applets are found by the package they came from, which is authoritative
+        // even if the registry entry was never written.
+        List<AppletInstance> apps = card.appletsOfPackage(elfAid);
         if (!apps.isEmpty() && !cascade) {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < apps.size(); i++) {
-                sb.append(i > 0 ? ", " : "").append(Hex.toHex(apps.get(i).aid));
+                sb.append(i > 0 ? ", " : "").append(apps.get(i).aidHex());
             }
             throw new GpException(SW_CONDITIONS,
-                    "load file " + Hex.toHex(elf.aid) + " still has application(s) "
+                    "load file " + Hex.toHex(elfAid) + " still has application(s) "
                     + sb + " - use DELETE with P2=80 to remove them too");
         }
 
-        LoadedPackage pkg = card.findLoaded(elf.aid);
+        LoadedPackage pkg = card.findLoaded(elfAid);
         if (pkg != null) {
             LoadedPackage dependent = card.packageDependingOn(pkg);
             if (dependent != null) {
                 throw new GpException(SW_CONDITIONS,
-                        "load file " + Hex.toHex(elf.aid) + " is imported by "
+                        "load file " + Hex.toHex(elfAid) + " is imported by "
                         + Hex.toHex(dependent.aid));
             }
         }
 
         for (int i = 0; i < apps.size(); i++) {
-            card.deleteApplet(apps.get(i).aid);
-            registry.remove(apps.get(i).aid);
-            card.log("  deleted application " + Hex.toHex(apps.get(i).aid));
+            byte[] appAid = apps.get(i).aid;
+            card.deleteApplet(appAid);
+            registry.remove(appAid);
+            card.log("  deleted application " + Hex.toHex(appAid));
         }
-        registry.remove(elf.aid);          // also drops its modules
-        card.unloadPackage(elf.aid);
-        card.log("DELETE load file " + Hex.toHex(elf.aid)
+        registry.remove(elfAid);           // also drops its modules
+        card.unloadPackage(elfAid);
+        card.log("DELETE load file " + Hex.toHex(elfAid)
                 + (cascade ? " and related objects" : ""));
         return sw(SW_OK);
     }
@@ -658,6 +685,11 @@ public final class CardManager {
             if (len == 0x81) {
                 len = data[p + 2] & 0xFF;
                 vOff = p + 3;
+            } else if (len == 0x82) {
+                len = ((data[p + 2] & 0xFF) << 8) | (data[p + 3] & 0xFF);
+                vOff = p + 4;
+            } else if (len > 0x82) {
+                break;
             }
             if (vOff + len > data.length) {
                 break;
@@ -701,18 +733,51 @@ public final class CardManager {
             return lvOrEmpty();
         }
 
+        /**
+         * GlobalPlatform writes these fields with a single length byte, but a
+         * field longer than 127 bytes is commonly sent with the BER long form
+         * (81 xx, or 82 xx xx), so both are accepted. 80 is the indefinite
+         * form, which has no meaning here.
+         */
         byte[] lvOrEmpty() {
             if (p >= d.length) {
                 return new byte[0];
             }
-            int len = d[p] & 0xFF;
-            if (p + 1 + len > d.length) {
+            int first = d[p] & 0xFF;
+            int len;
+            int valueAt;
+            if (first == 0x81) {
+                if (p + 2 > d.length) {
+                    throw new GpException(SW_WRONG_DATA,
+                            "truncated 81 length field");
+                }
+                len = d[p + 1] & 0xFF;
+                valueAt = p + 2;
+            } else if (first == 0x82) {
+                if (p + 3 > d.length) {
+                    throw new GpException(SW_WRONG_DATA,
+                            "truncated 82 length field");
+                }
+                len = ((d[p + 1] & 0xFF) << 8) | (d[p + 2] & 0xFF);
+                valueAt = p + 3;
+            } else if (first == 0x80) {
+                throw new GpException(SW_WRONG_DATA,
+                        "indefinite length (80) is not valid in an INSTALL field");
+            } else if (first > 0x82) {
+                throw new GpException(SW_WRONG_DATA,
+                        "unsupported length form " + String.format("%02X",
+                                Integer.valueOf(first)) + " in an INSTALL field");
+            } else {
+                len = first;
+                valueAt = p + 1;
+            }
+            if (valueAt + len > d.length) {
                 throw new GpException(SW_WRONG_DATA,
                         "length/value field runs past the end of the command");
             }
             byte[] out = new byte[len];
-            System.arraycopy(d, p + 1, out, 0, len);
-            p += 1 + len;
+            System.arraycopy(d, valueAt, out, 0, len);
+            p = valueAt + len;
             return out;
         }
     }
@@ -724,7 +789,12 @@ public final class CardManager {
         public final int statusWord;
 
         public GpException(int statusWord, String message) {
-            super(message + " (SW=" + Integer.toHexString(statusWord).toUpperCase() + ")");
+            this(statusWord, message, null);
+        }
+
+        public GpException(int statusWord, String message, Throwable cause) {
+            super(message + " (SW=" + Integer.toHexString(statusWord).toUpperCase() + ")",
+                    cause);
             this.statusWord = statusWord;
         }
     }

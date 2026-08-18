@@ -133,6 +133,8 @@ public final class ExpReader {
     public static ApiPackage read(byte[] data, String origin) {
         ExpReader e = new ExpReader(data, origin);
         ApiPackage p = e.parse();
+        p.source = origin;
+        p.fromExportFile = true;
         lastLayout = e.layout;
         lastVersion = e.majorVersion + "." + e.minorVersion;
         return p;
@@ -290,12 +292,34 @@ public final class ExpReader {
         List<File> found = new ArrayList<File>();
         collect(dir, found);
         List<ApiPackage> loaded = new ArrayList<ApiPackage>();
+        failures.clear();
+        scanned = found.size();
         for (int i = 0; i < found.size(); i++) {
-            ApiPackage p = read(found.get(i));
-            registry.add(p);
-            loaded.add(p);
+            File f = found.get(i);
+            try {
+                ApiPackage p = read(f);
+                registry.add(p);
+                loaded.add(p);
+            } catch (RuntimeException e) {
+                // One unreadable export file must not hide the others.
+                failures.add(f.getPath() + ": " + e.getMessage());
+            } catch (IOException e) {
+                failures.add(f.getPath() + ": " + e.getMessage());
+            }
         }
         return loaded;
+    }
+
+    /** Files that could not be parsed by the most recent loadDirectory. */
+    public static final List<String> failures = new ArrayList<String>();
+    /** How many .exp files the most recent loadDirectory found. */
+    public static int scanned;
+
+    /** Lists the export files under a directory without loading them. */
+    public static List<File> find(File dir) {
+        List<File> found = new ArrayList<File>();
+        collect(dir, found);
+        return found;
     }
 
     private static void collect(File dir, List<File> out) {

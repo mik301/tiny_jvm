@@ -35,7 +35,7 @@ Requires a JDK (Java 8 or newer). There are no libraries to fetch.
 | `loaddirect` / `installdirect` | the same, bypassing the card manager |
 | `apdu on\|off` | echo the APDUs that `load` and `install` build |
 | `select <aid>` | SELECT by DF name |
-| `send <hex>` — or just type the hex | send a command APDU |
+| `send <hex>` — or just type the hex | send a command APDU; `#( )` groups are length prefixed |
 | `params <hex>` | decode an install parameters field |
 | `delete <aid> [cascade]` | DELETE, optionally with related objects |
 | `gp` | GlobalPlatform registry: ELFs, modules, applications |
@@ -139,7 +139,16 @@ EF len  system specific parameters
           CA  UICC toolkit parameters     (ETSI TS 102 226)
           CB  UICC access parameters
           CC  UICC administrative access parameters
+EA len  UICC system specific parameters   (the other TS 102 226 coding)
+          80  UICC toolkit parameters
+          81  UICC access parameters
+          82  UICC administrative access parameters
 ```
+
+TS 102 226 allows the UICC parameters either flat as `CA`/`CB`/`CC` or wrapped
+in `EA` with sub-tags `80`/`81`/`82`. Both are accepted, at the top level of the
+install parameters or nested inside `EF`, and they configure the toolkit
+registry identically.
 
 The `C9` value is what the applet sees: the card manager hands `install()` a
 buffer in the GP layout `[len][instance AID][len][privileges][len][C9 value]`,

@@ -42,6 +42,7 @@ public final class CatRuntime {
     public static final short OUT_OF_TLV_BOUNDARIES = 6;
     public static final short UNAVAILABLE_ELEMENT = 7;
     public static final short BAD_INPUT_PARAMETER = 1;
+    public static final short NO_TIMER_AVAILABLE = 4;
 
     /** One applet's toolkit registration. */
     public static final class Registry {
@@ -78,6 +79,24 @@ public final class CatRuntime {
          */
         public int reservedIdentifier(int index) {
             return config == null ? 0 : Math.max(0, config.identifierFor(index));
+        }
+
+        private final java.util.Set<Integer> timers = new java.util.TreeSet<Integer>();
+
+        /** Allocates a timer identifier, 1..maxTimers. */
+        public int allocateTimer() {
+            for (int i = 1; i <= Math.max(maxTimers, 8); i++) {
+                if (timers.add(Integer.valueOf(i))) {
+                    return i;
+                }
+            }
+            throw toolkit(NO_TIMER_AVAILABLE);
+        }
+
+        public void releaseTimer(int id) {
+            if (!timers.remove(Integer.valueOf(id))) {
+                throw toolkit(BAD_INPUT_PARAMETER);
+            }
         }
 
         public boolean isEventSet(int event) {

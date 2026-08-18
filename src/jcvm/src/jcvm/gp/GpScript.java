@@ -140,12 +140,29 @@ public final class GpScript {
     /** A single INSTALL [for install and make selectable]. */
     public static byte[] buildInstallCommand(byte[] elfAid, byte[] moduleAid,
             byte[] instanceAid, byte[] appParams, byte[] systemParams) {
+        return buildInstallCommand(elfAid, moduleAid, instanceAid, appParams,
+                systemParams, null, (byte) 0);
+    }
+
+    /**
+     * {@code extraParams} is appended to the install parameters field after C9
+     * and EF, which is where an EA block normally sits.
+     */
+    public static byte[] buildInstallCommand(byte[] elfAid, byte[] moduleAid,
+            byte[] instanceAid, byte[] appParams, byte[] systemParams,
+            byte[] extraParams, byte privileges) {
         ByteArrayOutputStream ins = new ByteArrayOutputStream();
         lv(ins, elfAid);
         lv(ins, moduleAid);
         lv(ins, instanceAid == null || instanceAid.length == 0 ? moduleAid : instanceAid);
-        lv(ins, new byte[]{0x00});         // privileges
-        lv(ins, InstallParams.build(appParams, systemParams));
+        lv(ins, new byte[]{privileges});
+        ByteArrayOutputStream params = new ByteArrayOutputStream();
+        byte[] base = InstallParams.build(appParams, systemParams);
+        params.write(base, 0, base.length);
+        if (extraParams != null && extraParams.length > 0) {
+            params.write(extraParams, 0, extraParams.length);
+        }
+        lv(ins, params.toByteArray());
         lv(ins, new byte[0]);              // install token
         return apdu(0x80, 0xE6, 0x0C, 0x00, ins.toByteArray());
     }
@@ -156,8 +173,18 @@ public final class GpScript {
         return apdu(0x00, 0xA4, 0x04, 0x00, a);
     }
 
+    /** Length/value, using the BER long form when the value exceeds 127 bytes. */
     private static void lv(ByteArrayOutputStream out, byte[] value) {
-        out.write(value.length);
+        if (value.length > 0xFF) {
+            out.write(0x82);
+            out.write((value.length >> 8) & 0xFF);
+            out.write(value.length & 0xFF);
+        } else if (value.length > 0x7F) {
+            out.write(0x81);
+            out.write(value.length);
+        } else {
+            out.write(value.length);
+        }
         out.write(value, 0, value.length);
     }
 

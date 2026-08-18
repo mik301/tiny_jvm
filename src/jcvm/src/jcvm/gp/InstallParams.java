@@ -39,6 +39,17 @@ public final class InstallParams {
     public static final int TAG_UICC_ACCESS = 0xCB;
     public static final int TAG_UICC_ADMIN = 0xCC;
 
+    /**
+     * ETSI TS 102 226 also carries the UICC parameters inside tag EA, with
+     * sub-tags 80/81/82 instead of the flat CA/CB/CC tags. Both codings mean
+     * the same thing and both are accepted, at the top level of the install
+     * parameters or nested inside EF.
+     */
+    public static final int TAG_UICC_SYSTEM = 0xEA;
+    public static final int TAG_EA_TOOLKIT = 0x80;
+    public static final int TAG_EA_ACCESS = 0x81;
+    public static final int TAG_EA_ADMIN = 0x82;
+
     /** Value of C9: this is what reaches Applet.install(). */
     public byte[] appParams = new byte[0];
     /** Raw value of EF, if present. */
@@ -56,6 +67,8 @@ public final class InstallParams {
 
     /** True when the field was a bare blob rather than TLV. */
     public boolean untagged;
+    /** True when the UICC parameters arrived inside tag EA. */
+    public boolean uiccInEaTag;
 
     /**
      * UICC toolkit application parameters, tag CA of ETSI TS 102 226.
@@ -117,7 +130,8 @@ public final class InstallParams {
             return p;
         }
         int first = field[0] & 0xFF;
-        if (first != TAG_APP_PARAMS && first != TAG_SYSTEM_PARAMS) {
+        if (first != TAG_APP_PARAMS && first != TAG_SYSTEM_PARAMS
+                && first != TAG_UICC_SYSTEM) {
             p.untagged = true;
             p.appParams = field;
             return p;
@@ -131,6 +145,8 @@ public final class InstallParams {
             } else if (t[0] == TAG_SYSTEM_PARAMS) {
                 p.systemParams = value;
                 p.parseSystem(value);
+            } else if (t[0] == TAG_UICC_SYSTEM) {
+                p.parseUiccSystem(value);
             }
         }
         return p;
@@ -161,6 +177,32 @@ public final class InstallParams {
                     uiccAccessParams = value;
                     break;
                 case TAG_UICC_ADMIN:
+                    uiccAdminParams = value;
+                    break;
+                case TAG_UICC_SYSTEM:
+                    parseUiccSystem(value);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    /** Contents of tag EA: the same UICC parameters under sub-tags 80/81/82. */
+    private void parseUiccSystem(byte[] ea) {
+        uiccInEaTag = true;
+        List<int[]> tlvs = walk(ea);
+        for (int i = 0; i < tlvs.size(); i++) {
+            int[] t = tlvs.get(i);
+            byte[] value = slice(ea, t[1], t[2]);
+            switch (t[0]) {
+                case TAG_EA_TOOLKIT:
+                    toolkit = parseToolkit(value);
+                    break;
+                case TAG_EA_ACCESS:
+                    uiccAccessParams = value;
+                    break;
+                case TAG_EA_ADMIN:
                     uiccAdminParams = value;
                     break;
                 default:
@@ -213,8 +255,8 @@ public final class InstallParams {
                 }
                 len = ((d[p + 2] & 0xFF) << 8) | (d[p + 3] & 0xFF);
                 vOff = p + 4;
-            } else if (len > 0x82) {
-                break;
+            } else if (len == 0x80 || len > 0x82) {
+                break;   // indefinite or unsupported length form
             }
             if (vOff + len > d.length) {
                 break;
@@ -281,6 +323,30 @@ public final class InstallParams {
         return out.toByteArray();
     }
 
+    /** Wraps toolkit/access/admin parameters in the EA coding. */
+    public static byte[] buildUiccSystemParams(byte[] toolkitParams,
+            byte[] accessParams, byte[] adminParams) {
+        ByteArrayOutputStream v = new ByteArrayOutputStream();
+        appendTlv(v, TAG_EA_TOOLKIT, toolkitParams);
+        appendTlv(v, TAG_EA_ACCESS, accessParams);
+        appendTlv(v, TAG_EA_ADMIN, adminParams);
+        byte[] value = v.toByteArray();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TAG_UICC_SYSTEM);
+        out.write(value.length);
+        out.write(value, 0, value.length);
+        return out.toByteArray();
+    }
+
+    private static void appendTlv(ByteArrayOutputStream out, int tag, byte[] value) {
+        if (value == null) {
+            return;
+        }
+        out.write(tag);
+        out.write(value.length);
+        out.write(value, 0, value.length);
+    }
+
     public String describe() {
         StringBuilder sb = new StringBuilder();
         if (untagged) {
@@ -291,8 +357,9 @@ public final class InstallParams {
         sb.append("    C9 application parameters: ")
                 .append(appParams.length == 0 ? "(none)" : Hex.toHex(appParams))
                 .append('\n');
-        if (systemParams.length > 0) {
-            sb.append("    EF system parameters:\n");
+        if (systemParams.length > 0 || uiccInEaTag) {
+            sb.append(systemParams.length > 0
+                    ? "    EF system parameters:\n" : "    system parameters:\n");
             if (volatileQuota >= 0) {
                 sb.append("      C7 volatile quota ").append(volatileQuota).append('\n');
             }
@@ -308,15 +375,19 @@ public final class InstallParams {
                 sb.append("      D8 non-volatile reserved ")
                         .append(nonVolatileReserved).append('\n');
             }
+            String toolkitTag = uiccInEaTag ? "EA/80" : "CA";
+            String accessTag = uiccInEaTag ? "EA/81" : "CB";
+            String adminTag = uiccInEaTag ? "EA/82" : "CC";
             if (toolkit != null) {
-                sb.append("      CA toolkit: ").append(toolkit).append('\n');
+                sb.append("      ").append(toolkitTag).append(" toolkit: ")
+                        .append(toolkit).append('\n');
             }
             if (uiccAccessParams != null) {
-                sb.append("      CB access: ")
+                sb.append("      ").append(accessTag).append(" access: ")
                         .append(Hex.toHex(uiccAccessParams)).append('\n');
             }
             if (uiccAdminParams != null) {
-                sb.append("      CC admin: ")
+                sb.append("      ").append(adminTag).append(" admin: ")
                         .append(Hex.toHex(uiccAdminParams)).append('\n');
             }
         }

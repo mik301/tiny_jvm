@@ -205,6 +205,59 @@ public final class UiccNatives {
             }
         });
 
+        // TS 102 241 types events as short; the (B)V form is registered too
+        // because sim.toolkit uses byte.
+        n.put("uicc/toolkit/ToolkitRegistry.setEvent(S)V", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                registry(vm, a).events[eventIndex(a.sh(0))] = true;
+                vm.retVoid();
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.clearEvent(S)V", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                registry(vm, a).events[eventIndex(a.sh(0))] = false;
+                vm.retVoid();
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.isEventSet(S)Z", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                vm.retBool(registry(vm, a).isEventSet(eventIndex(a.sh(0))));
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.setEventList([SSS)V", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                jcvm.rt.JCArray list = a.array(0);
+                int off = a.sh(1);
+                int len = a.sh(2);
+                CatRuntime.Registry r = registry(vm, a);
+                for (int i = 0; i < len; i++) {
+                    r.events[eventIndex(list.getPrim(off + i))] = true;
+                }
+                vm.retVoid();
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.requestPollInterval(S)V", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                vm.retVoid();
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.allocateTimer()B", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                CatRuntime.Registry r = registry(vm, a);
+                vm.retShort(r.allocateTimer());
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.releaseTimer(B)V", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                registry(vm, a).releaseTimer(a.sh(0) & 0xFF);
+                vm.retVoid();
+            }
+        });
+        n.put("uicc/toolkit/ToolkitRegistry.enableMenuEntry(B)V", new NativeImpl() {
+            public void invoke(VM vm, NativeArgs a) {
+                vm.retVoid();
+            }
+        });
         n.put("uicc/toolkit/ToolkitRegistry.setEvent(B)V", new NativeImpl() {
             public void invoke(VM vm, NativeArgs a) {
                 registry(vm, a).events[eventIndex(a.sh(0))] = true;

@@ -8,6 +8,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
+import jcvm.api.ApiClass;
 import jcvm.api.ApiPackage;
 import jcvm.api.ExpReader;
 import jcvm.gp.GpRegistry;
@@ -18,6 +19,7 @@ import jcvm.jcre.JCRE;
 import jcvm.rt.LinkReport;
 import jcvm.rt.LoadedPackage;
 import jcvm.tool.CapBuilder;
+import jcvm.tool.ParamCapBuilder;
 import jcvm.tool.WalletCapBuilder;
 import jcvm.util.Hex;
 
@@ -134,8 +136,14 @@ public final class Main {
                 require(t.length > 1, "loadexp <dir with .exp files>");
                 java.util.List<ApiPackage> p = ExpReader.loadDirectory(
                         new File(t[1]), card.api);
-                if (p.isEmpty()) {
+                if (ExpReader.scanned == 0) {
                     out.println("no .exp files found under " + t[1]);
+                } else if (p.isEmpty()) {
+                    out.println("found " + ExpReader.scanned
+                            + " .exp file(s) but none could be parsed:");
+                    for (int i = 0; i < ExpReader.failures.size(); i++) {
+                        out.println("   " + ExpReader.failures.get(i));
+                    }
                 } else {
                     for (int i = 0; i < p.size(); i++) {
                         ApiPackage a = p.get(i);
@@ -143,10 +151,58 @@ public final class Main {
                                 + "  v" + a.major + "." + a.minor
                                 + "  " + a.byToken.size() + " classes");
                     }
+                    for (int i = 0; i < ExpReader.failures.size(); i++) {
+                        out.println("   could not read " + ExpReader.failures.get(i));
+                    }
                     card.refreshAppletTokens();
                     out.println("export file format " + ExpReader.lastVersion
                             + ", layout: " + ExpReader.lastLayout);
                     out.println("token tables replaced from export files");
+                    if (!card.packages.isEmpty()) {
+                        int n = card.relinkPackages();
+                        out.println("relinked " + n + " already loaded package(s)"
+                                + " against the new tables");
+                        out.println("note: applets installed before this were"
+                                + " created with the old tables; delete and"
+                                + " reinstall them if they misbehave");
+                    }
+                }
+            } else if ("findexp".equals(cmd)) {
+                require(t.length > 1, "findexp <directory>");
+                java.util.List<File> found = ExpReader.find(new File(t[1]));
+                if (found.isEmpty()) {
+                    out.println("no .exp files under " + t[1]);
+                }
+                for (int i = 0; i < found.size(); i++) {
+                    File f = found.get(i);
+                    String note;
+                    try {
+                        ApiPackage a = ExpReader.read(f);
+                        note = a.name + "  " + Hex.toHex(a.aid)
+                                + "  v" + a.major + "." + a.minor;
+                    } catch (Exception e) {
+                        note = "unreadable: " + e.getMessage();
+                    }
+                    out.println("   " + f.getPath() + "   " + note);
+                }
+            } else if ("settoken".equals(cmd)) {
+                require(t.length > 4,
+                        "settoken <internal/class/Name> V|S <token> <name(descriptor)ret>");
+                ApiClass ac = card.api.classByName(t[1]);
+                if (ac == null) {
+                    out.println("no API class " + t[1] + " in the token table");
+                } else {
+                    Integer token = Integer.valueOf(Integer.parseInt(t[3]));
+                    if ("V".equalsIgnoreCase(t[2])) {
+                        ac.virtualMethods.put(token, t[4]);
+                    } else if ("S".equalsIgnoreCase(t[2])) {
+                        ac.staticMethods.put(token, t[4]);
+                    } else {
+                        throw new IllegalArgumentException("use V or S, not " + t[2]);
+                    }
+                    card.refreshAppletTokens();
+                    out.println(t[1] + " " + t[2].toUpperCase() + " token "
+                            + t[3] + " -> " + t[4]);
                 }
             } else if ("dumpexp".equals(cmd)) {
                 require(t.length > 1, "dumpexp <file.exp>");
@@ -167,6 +223,11 @@ public final class Main {
                 } else {
                     out.print(sb);
                 }
+            } else if ("genparams".equals(cmd)) {
+                File f = new File(t.length > 1 ? t[1] : "params.cap");
+                ParamCapBuilder.writeCap(f);
+                out.println("wrote " + f.getPath()
+                        + "   module AID " + Hex.toHex(ParamCapBuilder.APPLET_AID));
             } else if ("load".equals(cmd)) {
                 require(t.length > 1, "load <file.cap>");
                 gpLoad(new File(t[1]));
@@ -179,12 +240,10 @@ public final class Main {
                     out.println("   module " + Hex.toHex(p.cap.applets.get(i).aid));
                 }
             } else if ("install".equals(cmd)) {
-                require(t.length > 1,
-                        "install <moduleAid> [instanceAid] [c9Hex] [efHex]");
-                gpInstall(Hex.parse(t[1]),
-                        t.length > 2 ? Hex.parse(t[2]) : null,
-                        t.length > 3 ? Hex.parse(t[3]) : null,
-                        t.length > 4 ? Hex.parse(t[4]) : null);
+                require(t.length > 1, "install <moduleAid> [instanceAid]"
+                        + " [c9=hex] [ef=hex] [toolkit=hex] [access=hex]"
+                        + " [admin=hex] [priv=hex]");
+                installCommand(t);
             } else if ("installdirect".equals(cmd)) {
                 require(t.length > 1,
                         "installdirect <moduleAid> [instanceAid] [paramsHex]");
@@ -217,9 +276,7 @@ public final class Main {
                 if (sw == 0x9000) {
                     out.println("deleted " + Hex.toHex(aid));
                 } else {
-                    out.println("delete failed, SW="
-                            + String.format("%04X", Integer.valueOf(sw))
-                            + "  (type 'error' for details)");
+                    reportFailure("delete", sw);
                 }
             } else if ("apdu".equals(cmd)) {
                 showApdu = t.length < 2 || "on".equalsIgnoreCase(t[1]);
@@ -237,7 +294,7 @@ public final class Main {
                 exchange(cmdApdu);
             } else if ("send".equals(cmd)) {
                 require(t.length > 1, "send <hex apdu>");
-                exchange(Hex.parse(join(t, 1)));
+                exchange(Hex.parseScript(join(t, 1)));
             } else if ("list".equals(cmd)) {
                 list();
             } else if ("info".equals(cmd)) {
@@ -252,11 +309,19 @@ public final class Main {
                 if (card.lastError == null) {
                     out.println("no error recorded");
                 } else {
+                    Throwable c2 = card.lastError;
+                    while (c2 != null && !(c2 instanceof jcvm.rt.JCThrow)) {
+                        c2 = c2.getCause();
+                    }
+                    if (c2 != null) {
+                        out.print(((jcvm.rt.JCThrow) c2).traceText());
+                    }
                     card.lastError.printStackTrace(out);
                 }
             } else {
-                // anything that looks like hex is treated as an APDU
-                exchange(Hex.parse(line));
+                // anything that looks like hex is treated as an APDU, and the
+                // #( ) notation of GP scripting tools is understood
+                exchange(Hex.parseScript(line));
             }
         } catch (Exception e) {
             out.println("error: " + e);
@@ -298,6 +363,96 @@ public final class Main {
         return sw;
     }
 
+    /** Prints instructions from a method, to read a bytecode trace against. */
+    private void disassemble(LoadedPackage p, int methodOffset, int count) {
+        byte[] code = p.code;
+        jcvm.rt.MethodRt m;
+        try {
+            m = p.method(methodOffset);
+        } catch (RuntimeException e) {
+            out.println("no method at offset " + methodOffset + ": " + e.getMessage());
+            return;
+        }
+        out.println(p.name() + "!method@" + methodOffset
+                + "  args=" + m.nargs + " locals=" + m.maxLocals
+                + " stack=" + m.maxStack);
+        int pc = m.codeStart;
+        for (int i = 0; i < count && pc < code.length; i++) {
+            int op = code[pc] & 0xFF;
+            int len = jcvm.rt.Opcodes.length(code, pc);
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("  %5d  ", Integer.valueOf(pc)));
+            for (int k = 0; k < len && pc + k < code.length; k++) {
+                sb.append(String.format("%02X ", Integer.valueOf(code[pc + k] & 0xFF)));
+            }
+            while (sb.length() < 26) {
+                sb.append(' ');
+            }
+            sb.append(jcvm.rt.Opcodes.name(op));
+            String note = cpOperand(p, code, pc, op);
+            if (note != null) {
+                while (sb.length() < 48) {
+                    sb.append(' ');
+                }
+                sb.append(note);
+            }
+            out.println(sb);
+            pc += len;
+            if (op == 122 || op == 119 || op == 120 || op == 121) {
+                break;      // a return ends the method body we care about
+            }
+        }
+    }
+
+    /** Resolves the constant pool operand of an instruction, if it has one. */
+    private String cpOperand(LoadedPackage p, byte[] code, int pc, int op) {
+        int index;
+        if ((op >= 123 && op <= 130)                   // get/putstatic
+                || op == 139 || op == 140 || op == 141 // invoke virtual/special/static
+                || op == 143 || op == 145              // new, anewarray
+                || (op >= 169 && op <= 172)            // getfield_<t>_w
+                || (op >= 177 && op <= 180)) {         // putfield_<t>_w
+            index = ((code[pc + 1] & 0xFF) << 8) | (code[pc + 2] & 0xFF);
+        } else if (op == 142) {                        // invokeinterface
+            index = ((code[pc + 2] & 0xFF) << 8) | (code[pc + 3] & 0xFF);
+        } else if ((op >= 131 && op <= 138)            // get/putfield_<t>
+                || (op >= 173 && op <= 176)            // getfield_<t>_this
+                || (op >= 181 && op <= 184)) {         // putfield_<t>_this
+            index = code[pc + 1] & 0xFF;
+        } else if (op == 148 || op == 149) {           // checkcast, instanceof
+            index = ((code[pc + 2] & 0xFF) << 8) | (code[pc + 3] & 0xFF);
+        } else {
+            return null;
+        }
+        try {
+            return card.vm.describeCpEntry(p, index);
+        } catch (RuntimeException e) {
+            return "#" + index + " (" + e + ")";
+        }
+    }
+
+    /** Prints why a command failed, rather than making the user ask. */
+    private void reportFailure(String what, int sw) {
+        out.println(what + " failed, SW=" + String.format("%04X", Integer.valueOf(sw)));
+        if (card.lastError == null) {
+            return;
+        }
+        String message = card.lastError.getMessage();
+        out.println("   " + (message != null ? message : card.lastError.toString()));
+        Throwable cause = card.lastError;
+        while (cause != null && !(cause instanceof jcvm.rt.JCThrow)) {
+            cause = cause.getCause();
+        }
+        if (cause != null) {
+            String trace = ((jcvm.rt.JCThrow) cause).traceText();
+            if (trace.length() > 0) {
+                out.println("   in the applet's bytecode:");
+                out.print(trace);
+            }
+        }
+        out.println("   ('error' prints the full stack trace)");
+    }
+
     /** Long LOAD blocks are shown truncated so the flow stays readable. */
     private static String abbreviate(byte[] a) {
         if (a.length <= 20) {
@@ -318,9 +473,7 @@ public final class Main {
                     + ((c[2] & 0x80) != 0 ? " (last)" : "");
             int sw = send(c, what);
             if (sw != 0x9000) {
-                out.println("load failed at " + what + ", SW="
-                        + String.format("%04X", Integer.valueOf(sw))
-                        + "  (type 'error' for details)");
+                reportFailure("load at " + what, sw);
                 return;
             }
         }
@@ -335,9 +488,63 @@ public final class Main {
         }
     }
 
+    /**
+     * Parses the install command line. After the module AID, one bare hex value
+     * is taken as the instance AID; everything else must be named, so nothing
+     * can be silently dropped.
+     */
+    private void installCommand(String[] t) {
+        byte[] module = Hex.parseScript(t[1]);
+        byte[] instance = null;
+        byte[] c9 = null;
+        byte[] ef = null;
+        byte[] toolkit = null;
+        byte[] access = null;
+        byte[] admin = null;
+        byte priv = 0;
+
+        for (int i = 2; i < t.length; i++) {
+            String arg = t[i];
+            int eq = arg.indexOf('=');
+            if (eq < 0) {
+                if (instance == null) {
+                    instance = Hex.parseScript(arg);
+                    continue;
+                }
+                throw new IllegalArgumentException("unexpected argument '" + arg
+                        + "'. After the instance AID every value must be named:"
+                        + " c9=, ef=, toolkit=, access=, admin=, priv=");
+            }
+            String key = arg.substring(0, eq).toLowerCase();
+            byte[] value = Hex.parseScript(arg.substring(eq + 1));
+            if ("c9".equals(key)) {
+                c9 = value;
+            } else if ("ef".equals(key)) {
+                ef = value;
+            } else if ("toolkit".equals(key)) {
+                toolkit = value;
+            } else if ("access".equals(key)) {
+                access = value;
+            } else if ("admin".equals(key)) {
+                admin = value;
+            } else if ("priv".equals(key)) {
+                priv = value.length > 0 ? value[0] : 0;
+            } else {
+                throw new IllegalArgumentException("unknown option '" + key
+                        + "'. Known: c9, ef, toolkit, access, admin, priv");
+            }
+        }
+
+        byte[] extra = null;
+        if (toolkit != null || access != null || admin != null) {
+            extra = InstallParams.buildUiccSystemParams(toolkit, access, admin);
+        }
+        gpInstall(module, instance, c9, ef, extra, priv);
+    }
+
     /** install: one INSTALL [for install and make selectable]. */
     private void gpInstall(byte[] moduleAid, byte[] instanceAid,
-            byte[] appParams, byte[] systemParams) {
+            byte[] appParams, byte[] systemParams, byte[] extraParams, byte priv) {
         selectCardManager();
         GpRegistry.Entry module = card.cardManager.registry.find(moduleAid,
                 GpRegistry.TYPE_MODULE);
@@ -349,11 +556,10 @@ public final class Main {
         byte[] instance = (instanceAid == null || instanceAid.length == 0)
                 ? moduleAid : instanceAid;
         byte[] command = GpScript.buildInstallCommand(module.elfAid, moduleAid,
-                instance, appParams, systemParams);
+                instance, appParams, systemParams, extraParams, priv);
         int sw = send(command, "INSTALL [for install and make selectable]");
         if (sw != 0x9000) {
-            out.println("install failed, SW=" + String.format("%04X", Integer.valueOf(sw))
-                    + "  (type 'error' for details)");
+            reportFailure("install", sw);
             return;
         }
         AppletInstance a = card.findApplet(instance);
@@ -377,7 +583,10 @@ public final class Main {
         for (int i = 0; i < card.applets.size(); i++) {
             AppletInstance a = card.applets.get(i);
             boolean sel = a == card.selectedApplet();
-            out.println((sel ? " * " : "   ") + a);
+            GpRegistry.Entry e = card.cardManager.registry.find(a.aid);
+            out.println((sel ? " * " : "   ") + a
+                    + (e == null ? "   [not in the GP registry]"
+                                 : "   " + e.lifeCycleName()));
         }
     }
 
@@ -389,22 +598,32 @@ public final class Main {
         out.println("applets         : " + card.applets.size());
         out.println("native methods  : " + card.natives.size());
         out.println("api packages    : " + card.api.packageCount());
+        for (ApiPackage a : card.api.packages()) {
+            out.println("   " + a.name + "  v" + a.major + "." + a.minor
+                    + "  " + a.byToken.size() + " classes  <- " + a.source
+                    + (a.fromExportFile ? "" : "   (guessed, may not match your CAP)"));
+        }
     }
 
     private void help() {
         out.println("  gendemo [file]                 write a demo CAP built into this VM");
         out.println("  loadexp <dir>                  read API tokens from SDK .exp files");
+        out.println("  findexp <dir>                  list .exp files and the packages in them");
         out.println("  dumpexp <file.exp>             parse one export file and show it");
+        out.println("  settoken <class> V|S <tok> <sig>  correct one token by hand");
         out.println("  dumptokens [file]              print/save the tokens in use");
         out.println("  genwallet [file]               write the Wallet demo CAP");
+        out.println("  genparams [file]               write the install-parameter test CAP");
         out.println("  load <file.cap>                INSTALL [for load] + LOAD blocks");
         out.println("  loaddirect <file.cap>          load without going through the ISD");
         out.println("  installdirect <moduleAid> ...  install without an INSTALL APDU");
         out.println("  delete <aid> [cascade]         DELETE, optionally with related objects");
         out.println("  apdu on|off                    echo the APDUs load/install build");
-        out.println("  install <moduleAid> [instAid] [c9Hex] [efHex]");
+        out.println("  install <moduleAid> [instAid] [c9=hex] [ef=hex]");
+        out.println("            [toolkit=hex] [access=hex] [admin=hex] [priv=hex]");
         out.println("  select <aid>                   SELECT by DF name");
         out.println("  send <hex>                     send a command APDU");
+        out.println("                                 #( ) groups are length prefixed");
         out.println("  <hex>                          same as send");
         out.println("  missing                        API methods a loaded CAP needs but lacks");
         out.println("  envelope <event> <hex>         trigger toolkit applets on an event");
@@ -419,6 +638,8 @@ public final class Main {
         out.println("  info                           loaded packages and VM state");
         out.println("  reset                          card reset");
         out.println("  trace on|off                   bytecode tracing");
+        out.println("  dis <methodOffset> [n] [pkgAid]  disassemble a method");
+        out.println("  cp <index> [pkgAid]            resolve a constant pool entry");
         out.println("  error                          stack trace of the last 6F00");
         out.println("  quit");
     }

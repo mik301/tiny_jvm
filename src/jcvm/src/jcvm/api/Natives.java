@@ -21,9 +21,73 @@ import jcvm.rt.VM;
 public final class Natives {
 
     private final Map<String, NativeImpl> map = new HashMap<String, NativeImpl>();
+    /** Keys that were bound by argument shape rather than exact descriptor. */
+    public final Map<String, String> approximate = new java.util.TreeMap<String, String>();
 
     public NativeImpl get(String key) {
         return map.get(key);
+    }
+
+    /**
+     * Resolves a method key, tolerating a descriptor that differs from the one
+     * this VM was written against.
+     *
+     * The token and the method name come from your SDK's export files and are
+     * authoritative; the descriptor this VM guessed may not be. uicc.toolkit
+     * events are short rather than byte, for instance. Both occupy one 16 bit
+     * word, so an implementation written for the wrong one still reads its
+     * arguments correctly - what matters is that the argument words line up.
+     * A candidate is therefore accepted when its name matches and its argument
+     * area is the same size, and never when that would be ambiguous.
+     */
+    public NativeImpl resolve(String key) {
+        NativeImpl exact = map.get(key);
+        if (exact != null) {
+            return exact;
+        }
+        int paren = key.indexOf('(');
+        if (paren < 0) {
+            return null;
+        }
+        String prefix = key.substring(0, paren + 1);
+        int wantWords;
+        char wantReturn;
+        try {
+            Descriptor d = Descriptor.of(key);
+            wantWords = d.argWords;
+            wantReturn = d.returnKind;
+        } catch (RuntimeException e) {
+            return null;
+        }
+        NativeImpl candidate = null;
+        String candidateKey = null;
+        int matches = 0;
+        for (Map.Entry<String, NativeImpl> e : map.entrySet()) {
+            if (!e.getKey().startsWith(prefix)) {
+                continue;
+            }
+            Descriptor d;
+            try {
+                d = Descriptor.of(e.getKey());
+            } catch (RuntimeException ex) {
+                continue;
+            }
+            if (d.argWords != wantWords) {
+                continue;
+            }
+            boolean bothVoid = (d.returnKind == 'V') == (wantReturn == 'V');
+            if (!bothVoid) {
+                continue;
+            }
+            candidate = e.getValue();
+            candidateKey = e.getKey();
+            matches++;
+        }
+        if (matches == 1) {
+            approximate.put(key, candidateKey);
+            return candidate;
+        }
+        return null;
     }
 
     public void put(String key, NativeImpl impl) {

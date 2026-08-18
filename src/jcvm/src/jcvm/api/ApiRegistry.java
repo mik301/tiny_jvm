@@ -103,6 +103,7 @@ public final class ApiRegistry {
                     if (t.length > 4) {
                         pkg.minor = Integer.parseInt(t[4]);
                     }
+                    pkg.source = origin;
                     byAid.put(Hex.toHex(pkg.aid).toUpperCase(), pkg);
                     byName.put(pkg.name, pkg);
                     cls = null;

@@ -102,6 +102,25 @@ public final class JCRE implements PackageResolver {
         resolveAppletTokens();
     }
 
+    /**
+     * Re-resolves every loaded package against the current token tables, and
+     * returns the number relinked. Needed after loadexp, because a package
+     * linked earlier still points at the tables it was linked with.
+     */
+    public int relinkPackages() {
+        int n = 0;
+        for (int i = 0; i < packages.size(); i++) {
+            try {
+                packages.get(i).relinkImports();
+                n++;
+            } catch (RuntimeException e) {
+                lastError = e;
+                log("could not relink " + packages.get(i).name() + ": " + e.getMessage());
+            }
+        }
+        return n;
+    }
+
     private void resolveAppletTokens() {
         ApiClass applet = api.classByName(APPLET_CLASS);
         if (applet == null) {
@@ -158,8 +177,57 @@ public final class JCRE implements PackageResolver {
         }
         LoadedPackage lp = new LoadedPackage(cp, this);
         lp.link();
+        checkImportedTokenSources(cp);
         packages.add(lp);
+        registerLoadFile(lp);
         return lp;
+    }
+
+    /**
+     * Warns when a CAP imports an API package whose token assignment is the
+     * bundled guess rather than the export files the converter actually used.
+     * Getting this wrong does not fail cleanly: a method token resolves to the
+     * wrong name, and the VM then looks for the receiver in the wrong stack
+     * slot, which surfaces much later as a NullPointerException.
+     */
+    private void checkImportedTokenSources(CapPackage cp) {
+        for (int i = 0; i < cp.imports.size(); i++) {
+            CapPackage.PackageInfo imported = cp.imports.get(i);
+            ApiPackage api2 = api.packageByAid(imported.aid);
+            if (api2 == null) {
+                continue;                    // resolved to another loaded CAP
+            }
+            if (!api2.fromExportFile) {
+                log("warning: " + api2.name + " tokens come from "
+                        + api2.source + ", not from your SDK's export files.");
+                log("         If a call fails oddly, run"
+                        + " 'loadexp <sdk>/api_export_files' and load again.");
+            } else if (api2.major != imported.major || api2.minor != imported.minor) {
+                log("warning: this CAP was built against " + api2.name + " v"
+                        + imported.major + "." + imported.minor
+                        + " but the loaded export file is v"
+                        + api2.major + "." + api2.minor
+                        + " - token assignments may differ.");
+            }
+        }
+    }
+
+    /**
+     * Mirrors a loaded package into the GlobalPlatform registry. Called for
+     * every load, whether it arrived over LOAD commands or through loadCap,
+     * so the registry and the JCRE can never disagree about what is on the card.
+     */
+    private void registerLoadFile(LoadedPackage lp) {
+        jcvm.gp.GpRegistry reg = cardManager.registry;
+        if (reg.find(lp.aid) != null) {
+            return;
+        }
+        jcvm.gp.GpRegistry.Entry elf = reg.addElf(lp.aid);
+        for (int i = 0; i < lp.cap.applets.size(); i++) {
+            byte[] moduleAid = lp.cap.applets.get(i).aid;
+            elf.modules.add(moduleAid);
+            reg.addModule(moduleAid, lp.aid);
+        }
     }
 
     /* ------------------------------------------------------------------ */
@@ -233,6 +301,9 @@ public final class JCRE implements PackageResolver {
         }
         AppletInstance created = justRegistered;
         justRegistered = null;
+        if (cardManager.registry.find(created.aid) == null) {
+            cardManager.registry.addApplication(created.aid, owner.aid, (byte) 0, true);
+        }
         return created;
     }
 
@@ -304,7 +375,26 @@ public final class JCRE implements PackageResolver {
         return selectingInstance != null && selectingInstance.object == appletObject;
     }
 
+    /**
+     * JCSystem.getAID() is the AID of the applet whose code is running, which
+     * during install() is the applet being installed - not the selected one,
+     * because nothing is selected yet at that point.
+     */
     public BuiltinObject currentAidObject() {
+        Object running = currentApplet();
+        if (running != null) {
+            for (int i = 0; i < applets.size(); i++) {
+                if (applets.get(i).object == running) {
+                    return applets.get(i).aidObject;
+                }
+            }
+        }
+        if (pendingInstanceAid != null) {
+            // register() has not run yet, but the AID is already known
+            BuiltinObject aidObject = new BuiltinObject("javacard/framework/AID");
+            aidObject.data = pendingInstanceAid;
+            return aidObject;
+        }
         return selected != null ? selected.aidObject : null;
     }
 
@@ -497,6 +587,7 @@ public final class JCRE implements PackageResolver {
             return false;
         }
         packages.remove(p);
+        cardManager.registry.remove(aid);
         return true;
     }
 
@@ -510,7 +601,21 @@ public final class JCRE implements PackageResolver {
             deselectCurrent();
         }
         applets.remove(a);
+        toolkitRegistries.remove(a.object);
+        cardManager.registry.remove(a.aid);
         return true;
+    }
+
+    /** Every installed applet that came from a given package. */
+    public List<AppletInstance> appletsOfPackage(byte[] packageAid) {
+        List<AppletInstance> out = new ArrayList<AppletInstance>();
+        for (int i = 0; i < applets.size(); i++) {
+            AppletInstance a = applets.get(i);
+            if (a.pkg != null && java.util.Arrays.equals(a.pkg.aid, packageAid)) {
+                out.add(a);
+            }
+        }
+        return out;
     }
 
     /* ------------------------------------------------------------------ */
@@ -599,11 +704,18 @@ public final class JCRE implements PackageResolver {
 
     private String toolkitInterfaceName = TOOLKIT_INTERFACES[0];
 
+    private static final String[] PROCESS_TOOLKIT_SIGNATURES = {
+        "processToolkit(S)V", "processToolkit(B)V"
+    };
+
     private int toolkitProcessToken() {
         for (int i = 0; i < TOOLKIT_INTERFACES.length; i++) {
             ApiClass ac = api.classByName(TOOLKIT_INTERFACES[i]);
-            if (ac != null) {
-                int t = ac.virtualTokenOf("processToolkit(B)V");
+            if (ac == null) {
+                continue;
+            }
+            for (int j = 0; j < PROCESS_TOOLKIT_SIGNATURES.length; j++) {
+                int t = ac.virtualTokenOf(PROCESS_TOOLKIT_SIGNATURES[j]);
                 if (t >= 0) {
                     toolkitInterfaceName = TOOLKIT_INTERFACES[i];
                     return t;

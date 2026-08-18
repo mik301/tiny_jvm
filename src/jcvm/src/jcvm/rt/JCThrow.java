@@ -29,6 +29,23 @@ public class JCThrow extends RuntimeException {
     public final String className;
     public Object thrown;
     public int reason;
+    /** Where in the applet's bytecode this passed through, innermost first. */
+    public final java.util.List<String> vmTrace = new java.util.ArrayList<String>();
+
+    public void addFrame(String where) {
+        if (vmTrace.size() < 32) {
+            vmTrace.add(where);
+        }
+    }
+
+    /** The bytecode trace, one frame per line, or an empty string. */
+    public String traceText() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < vmTrace.size(); i++) {
+            sb.append("      at ").append(vmTrace.get(i)).append('\n');
+        }
+        return sb.toString();
+    }
 
     public JCThrow(String className, String message) {
         super(className + (message == null ? "" : ": " + message));

@@ -10,6 +10,9 @@ public final class ApiPackage {
     public final byte[] aid;
     public int major = 1;
     public int minor = 0;
+    /** Where these tokens came from, for warning about guessed defaults. */
+    public String source = "the bundled api-tokens.txt";
+    public boolean fromExportFile;
 
     public final Map<Integer, ApiClass> byToken = new HashMap<Integer, ApiClass>();
     public final Map<String, ApiClass> byName = new HashMap<String, ApiClass>();

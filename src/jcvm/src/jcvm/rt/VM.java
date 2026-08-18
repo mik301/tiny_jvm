@@ -162,6 +162,7 @@ public final class VM {
                 } catch (JCThrow t) {
                     int handler = findHandler(f, t);
                     if (handler < 0) {
+                        t.addFrame(describeLocation(f));
                         throw t;
                     }
                     for (int i = 0; i < f.sr.length; i++) {
@@ -175,6 +176,17 @@ public final class VM {
         } finally {
             depth--;
         }
+    }
+
+    /** "package!method@offset pc=N opcode" for the frame's current instruction. */
+    private static String describeLocation(Frame f) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(f.pkg.name()).append("!method@").append(f.method.offset)
+                .append(" pc=").append(f.pc);
+        if (f.pc >= 0 && f.pc < f.code.length) {
+            sb.append(' ').append(Opcodes.name(f.code[f.pc] & 0xFF));
+        }
+        return sb.toString();
     }
 
     private void run(Frame f) {
@@ -1073,7 +1085,8 @@ public final class VM {
     /** kind: 0=a 1=b 2=s 3=i */
     private void getField(Frame f, LoadedPackage pkg, int cpIndex, int kind, Object obj) {
         if (obj == null) {
-            throw JCThrow.nullPointer();
+            throw new JCThrow(JCThrow.NULL_POINTER,
+                    "reading " + describeCpEntry(pkg, cpIndex) + " of a null object");
         }
         int token = cp(pkg, cpIndex).token;
         if (!(obj instanceof JCObject)) {
@@ -1151,9 +1164,19 @@ public final class VM {
             nargs = Descriptor.of(apiVirtualKey((String) declared, token)).argWords + 1;
         }
 
+        if (nargs > f.sp) {
+            throw new JCThrow("java/lang/Error", "calling "
+                    + describeCpEntry(pkg, cpIndex) + " needs " + nargs
+                    + " words but only " + f.sp + " are on the stack");
+        }
         Object receiver = f.peekRef(nargs - 1);
         if (receiver == null) {
-            throw JCThrow.nullPointer();
+            throw new JCThrow(JCThrow.NULL_POINTER,
+                    "receiver is null calling " + describeCpEntry(pkg, cpIndex)
+                    + "; the receiver was read " + (nargs - 1)
+                    + " words down the stack, so if that method's descriptor in"
+                    + " api-tokens.txt has the wrong argument count this is"
+                    + " looking at the wrong slot");
         }
         if (receiver instanceof JCObject) {
             ClassRt.VirtualTarget t = ((JCObject) receiver).clazz.lookupVirtual(token);
@@ -1252,7 +1275,9 @@ public final class VM {
         Object iface = resolveClass(pkg, e);
         Object receiver = f.peekRef(nargs - 1);
         if (receiver == null) {
-            throw JCThrow.nullPointer();
+            throw new JCThrow(JCThrow.NULL_POINTER,
+                    "receiver is null calling interface method " + methodToken
+                    + " of " + describeCpEntry(pkg, cpIndex));
         }
         if (receiver instanceof BuiltinObject) {
             // FileView, ToolkitRegistry and the handlers are interfaces whose
@@ -1310,10 +1335,16 @@ public final class VM {
     }
 
     private void invokeNative(Frame caller, String key, boolean consumesSelf) {
-        NativeImpl impl = natives.get(key);
+        NativeImpl impl = natives.resolve(key);
         if (impl == null) {
             throw new LinkException("this VM does not implement " + key
                     + "\n  (the token resolved fine - the method itself is missing)");
+        }
+        if (trace) {
+            String bound = natives.approximate.get(key);
+            if (bound != null) {
+                out.println("    -> " + key + " bound to " + bound);
+            }
         }
         Descriptor d = Descriptor.of(key);
         int n = d.argWords;
@@ -1371,6 +1402,56 @@ public final class VM {
             default:
                 break;
         }
+    }
+
+    /** Human readable form of a constant pool entry, for traces and dumps. */
+    public String describeCpEntry(LoadedPackage pkg, int index) {
+        CapPackage.CpEntry e;
+        try {
+            e = cp(pkg, index);
+        } catch (RuntimeException ex) {
+            return "#" + index + " (out of range)";
+        }
+        StringBuilder sb = new StringBuilder("#").append(index);
+        if (!e.external) {
+            sb.append(" internal");
+            if (e.tag == CapPackage.CP_CLASSREF) {
+                sb.append(" class@").append(e.offset);
+            } else if (e.tag == CapPackage.CP_INSTANCE_FIELDREF) {
+                sb.append(" field token ").append(e.token);
+            } else {
+                sb.append(" @").append(e.offset);
+            }
+            return sb.toString();
+        }
+        ApiClass ac = null;
+        try {
+            ac = pkg.externalApiClass(e.packageToken, e.classToken);
+        } catch (RuntimeException ex) {
+            // fall through
+        }
+        if (ac == null) {
+            sb.append(" external pkg=").append(e.packageToken)
+                    .append(" class=").append(e.classToken);
+            if (e.tag >= CapPackage.CP_INSTANCE_FIELDREF) {
+                sb.append(" token=").append(e.token);
+            }
+            return sb.toString();
+        }
+        sb.append(' ').append(ac.name);
+        if (e.tag == CapPackage.CP_CLASSREF) {
+            return sb.toString();
+        }
+        String key = (e.tag == CapPackage.CP_STATIC_METHODREF)
+                ? ac.staticKey(e.token) : ac.virtualKey(e.token);
+        if (key != null) {
+            sb.append('.').append(key.substring(key.indexOf('.') + 1));
+            Descriptor d = Descriptor.of(key);
+            sb.append("  [").append(d.argWords).append(" arg words]");
+        } else {
+            sb.append(" token ").append(e.token).append("  (NOT IN THE TOKEN TABLE)");
+        }
+        return sb.toString();
     }
 
     /* ---------------- API binding ---------------- */

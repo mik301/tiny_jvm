@@ -48,6 +48,30 @@ public final class LoadedPackage {
         buildStaticImage();
     }
 
+    /**
+     * Re-resolves the Import component against the current token tables.
+     *
+     * The imports array holds the ApiPackage objects captured when this package
+     * was linked, so loading export files afterwards would otherwise leave an
+     * already-loaded CAP resolving against the old tables.
+     */
+    public void relinkImports() {
+        linkImports();
+        for (ClassRt c : classes.values()) {
+            CapPackage.ClassInfo ci = c.info;
+            if (ci.isInterface || !ci.hasSuper || !ci.superExternal) {
+                continue;
+            }
+            Object owner = importAt(ci.superPackageToken);
+            if (owner instanceof ApiPackage) {
+                ApiClass ac = ((ApiPackage) owner).classByToken(ci.superClassToken);
+                if (ac != null) {
+                    c.externalSuperName = ac.name;
+                }
+            }
+        }
+    }
+
     private void linkImports() {
         int n = cap.imports.size();
         imports = new Object[n];
