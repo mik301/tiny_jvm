@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # jcvm — a Java Card virtual machine
 
 A Java Card VM and card runtime environment written in plain Java, with no
@@ -151,3 +152,8 @@ array access, native API calls and exception-to-status-word mapping in one pass.
 ## License
 
 MIT.
+=======
+# tiny_jvm
+# tiny_jvm
+# tiny_jvm
+>>>>>>> 1fec895 (first commit)
