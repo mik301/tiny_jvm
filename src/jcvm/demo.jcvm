@@ -1,0 +1,15 @@
+# Demo script: build a CAP, load it, install the applet, talk to it.
+# Run with:  ./run.sh demo.jcvm
+gendemo demo.cap
+load demo.cap
+install 01020304050607
+list
+select 01020304050607
+send 80 10 00 00 00      # increment counter, expect 0001 9000
+send 80 10 00 00 00      # again,             expect 0002 9000
+send 80 20 00 00 04 DEADBEEF 04   # echo 4 bytes back
+send 80 30 00 00 01 7F   # store 0x7F into mem[0]
+send 80 40 00 00 00      # read it back, expect 7F 9000
+send 80 99 00 00 00      # unknown INS, expect SW=6D00
+info
+quit

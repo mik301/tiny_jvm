@@ -1,0 +1,42 @@
+# The real GlobalPlatform flow, end to end.
+#
+#   terminal -> ISD (card manager) -> loader -> JCRE -> JVM -> applet
+#
+# Run with:  ./run.sh gpflow.jcvm
+
+genwallet wallet.cap
+
+# 1. Select the card manager. No applet exists yet, so this is the only
+#    thing on the card that can answer.
+send 00 A4 04 00 00
+
+# 2. Open a secure channel. No SCP keys here, so these are accepted
+#    without verification, but the sequence is the real one.
+send 80 50 00 00 08 0102030405060708
+send 84 82 00 00 10 00112233445566778899AABBCCDDEEFF
+
+# 3. INSTALL [for load]: tell the card an ELF with this AID is coming.
+#    Then LOAD blocks carry the CAP components, then INSTALL [for install
+#    and make selectable] runs the applet's install() and registers it.
+#    gpload builds and sends exactly that sequence.
+# 'load' and 'install' now build and send these APDUs themselves, so the
+# short commands and the raw sequence are the same path.
+load wallet.cap
+install A0000001020304
+
+# 4. What is on the card now.
+gp
+send 80 F2 40 00 02 4F00
+
+# 5. Select the applet and use it. From here the card manager is out of
+#    the picture; APDUs go straight to Applet.process.
+send 00 A4 04 00 07 A0000001020304
+send B0 50 00 00 02
+send B0 30 00 00 02 00 64
+send B0 50 00 00 02
+
+# 6. Delete it again.
+send 00 A4 04 00 00
+send 80 E4 00 80 09 4F 07 A0000001020304
+gp
+quit

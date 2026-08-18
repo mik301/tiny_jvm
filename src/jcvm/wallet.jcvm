@@ -1,0 +1,21 @@
+# Wallet applet demo - no Java Card SDK needed.
+# Run with:  ./run.sh wallet.jcvm
+genwallet wallet.cap
+load wallet.cap
+install A0000001020304
+select A0000001020304
+
+send B0 50 00 00 02            # balance -> 0000
+send B0 30 00 00 02 00 64      # credit 100 -> 9000
+send B0 50 00 00 02            # balance -> 0064
+send B0 40 00 00 02 00 0A      # debit 10 -> 9000
+send B0 50 00 00 02            # balance -> 005A
+
+send B0 30 00 00 02 00 00      # amount 0        -> 6A80
+send B0 30 00 00 02 27 11      # would exceed max -> 6A84
+send B0 40 00 00 02 27 10      # more than balance -> 6A85
+send A0 50 00 00 02            # wrong CLA        -> 6E00
+send B0 99 00 00 00            # unknown INS      -> 6D00
+
+send B0 50 00 00 02            # balance unchanged -> 005A
+quit
