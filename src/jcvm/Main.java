@@ -8,10 +8,14 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
+import jcvm.api.ApiPackage;
+import jcvm.api.ExpReader;
 import jcvm.jcre.AppletInstance;
 import jcvm.jcre.JCRE;
+import jcvm.rt.LinkReport;
 import jcvm.rt.LoadedPackage;
 import jcvm.tool.CapBuilder;
+import jcvm.tool.WalletCapBuilder;
 import jcvm.util.Hex;
 
 /** Command line front end: a card reader you type APDUs into. */
@@ -118,6 +122,48 @@ public final class Main {
                 CapBuilder.writeCap(f);
                 out.println("wrote " + f.getPath()
                         + "   module AID " + Hex.toHex(CapBuilder.APPLET_AID));
+            } else if ("genwallet".equals(cmd)) {
+                File f = new File(t.length > 1 ? t[1] : "wallet.cap");
+                WalletCapBuilder.writeCap(f);
+                out.println("wrote " + f.getPath()
+                        + "   module AID " + Hex.toHex(WalletCapBuilder.APPLET_AID));
+            } else if ("loadexp".equals(cmd)) {
+                require(t.length > 1, "loadexp <dir with .exp files>");
+                java.util.List<ApiPackage> p = ExpReader.loadDirectory(
+                        new File(t[1]), card.api);
+                if (p.isEmpty()) {
+                    out.println("no .exp files found under " + t[1]);
+                } else {
+                    for (int i = 0; i < p.size(); i++) {
+                        ApiPackage a = p.get(i);
+                        out.println("  " + a.name + "  " + Hex.toHex(a.aid)
+                                + "  v" + a.major + "." + a.minor
+                                + "  " + a.byToken.size() + " classes");
+                    }
+                    card.refreshAppletTokens();
+                    out.println("export file format " + ExpReader.lastVersion
+                            + ", layout: " + ExpReader.lastLayout);
+                    out.println("token tables replaced from export files");
+                }
+            } else if ("dumpexp".equals(cmd)) {
+                require(t.length > 1, "dumpexp <file.exp>");
+                ApiPackage a = ExpReader.read(new File(t[1]));
+                out.println("format " + ExpReader.lastVersion
+                        + ", layout: " + ExpReader.lastLayout);
+                out.print(ExpReader.toTokenTable(a));
+            } else if ("dumptokens".equals(cmd)) {
+                StringBuilder sb = new StringBuilder();
+                for (ApiPackage a : card.api.packages()) {
+                    sb.append(ExpReader.toTokenTable(a)).append('\n');
+                }
+                if (t.length > 1) {
+                    java.io.FileWriter w = new java.io.FileWriter(t[1]);
+                    w.write(sb.toString());
+                    w.close();
+                    out.println("wrote " + t[1]);
+                } else {
+                    out.print(sb);
+                }
             } else if ("load".equals(cmd)) {
                 require(t.length > 1, "load <file.cap>");
                 LoadedPackage p = card.loadCap(new File(t[1]));
@@ -125,6 +171,42 @@ public final class Main {
                         + " with " + p.cap.applets.size() + " applet module(s)");
                 for (int i = 0; i < p.cap.applets.size(); i++) {
                     out.println("   module " + Hex.toHex(p.cap.applets.get(i).aid));
+                }
+            } else if ("missing".equals(cmd)) {
+                if (card.packages.isEmpty()) {
+                    out.println("no packages loaded");
+                } else {
+                    for (int i = 0; i < card.packages.size(); i++) {
+                        LoadedPackage p = card.packages.get(i);
+                        out.println(Hex.toHex(p.aid) + ":");
+                        out.print(LinkReport.of(card.vm, p).describe());
+                    }
+                }
+            } else if ("envelope".equals(cmd)) {
+                require(t.length > 2, "envelope <eventNumber> <hex envelope>");
+                byte event = (byte) Integer.parseInt(t[1]);
+                byte[] data = Hex.parse(join(t, 2));
+                int n = card.triggerEvent(event, data);
+                out.println("triggered " + n + " applet(s) on event " + (event & 0xFF));
+                java.util.List<byte[]> issued = card.cat.issuedCommands();
+                for (int i = 0; i < issued.size(); i++) {
+                    out.println("proactive --> " + Hex.toSpaced(issued.get(i)));
+                }
+                if (card.lastError != null) {
+                    out.println("(an applet threw; type 'error' for the trace)");
+                }
+            } else if ("cat".equals(cmd)) {
+                out.print(card.cat.describe());
+            } else if ("fs".equals(cmd)) {
+                if (t.length > 1) {
+                    card.fileSystem.load(new File(t[1]));
+                    out.println("file system loaded from " + t[1]);
+                } else {
+                    java.util.List<jcvm.uicc.UiccFileSystem.Ef> fl =
+                            card.fileSystem.allFiles();
+                    for (int i = 0; i < fl.size(); i++) {
+                        out.println("  " + fl.get(i));
+                    }
                 }
             } else if ("install".equals(cmd)) {
                 require(t.length > 1, "install <moduleAid> [instanceAid] [paramsHex]");
@@ -214,11 +296,19 @@ public final class Main {
 
     private void help() {
         out.println("  gendemo [file]                 write a demo CAP built into this VM");
+        out.println("  loadexp <dir>                  read API tokens from SDK .exp files");
+        out.println("  dumpexp <file.exp>             parse one export file and show it");
+        out.println("  dumptokens [file]              print/save the tokens in use");
+        out.println("  genwallet [file]               write the Wallet demo CAP");
         out.println("  load <file.cap>                load and link a CAP file");
         out.println("  install <moduleAid> [instAid] [paramsHex]");
         out.println("  select <aid>                   SELECT by DF name");
         out.println("  send <hex>                     send a command APDU");
         out.println("  <hex>                          same as send");
+        out.println("  missing                        API methods a loaded CAP needs but lacks");
+        out.println("  envelope <event> <hex>         trigger toolkit applets on an event");
+        out.println("  cat                            toolkit registrations and proactive log");
+        out.println("  fs [file]                      show or load the UICC file system");
         out.println("  list                           installed applets");
         out.println("  info                           loaded packages and VM state");
         out.println("  reset                          card reset");
