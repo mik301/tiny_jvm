@@ -1,0 +1,6 @@
+out/
+*.class
+*.cap
+!demo.cap
+.idea/
+*.iml

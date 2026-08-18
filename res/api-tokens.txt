@@ -1,0 +1,155 @@
+# ---------------------------------------------------------------------------
+#  API token table
+# ---------------------------------------------------------------------------
+#  Java Card CAP files address API classes and methods by NUMERIC TOKEN, not by
+#  name. The token assignment lives in the export files (*.exp) that ship with
+#  a Java Card SDK, so it is a property of YOUR toolchain, not of this VM.
+#
+#  The table below is the assignment used by the bundled CapBuilder tool, so
+#  jcvm and CapBuilder always agree. It is a plausible layout, but it is NOT
+#  guaranteed to match the export files of the SDK that converted your CAP.
+#
+#  If a real CAP fails with "no token table entry for ...", dump the tokens
+#  from your SDK export files (exp2text / the Converter's -exportmap output)
+#  and correct the numbers here. Nothing else in the VM needs to change.
+#
+#  Format:
+#    PKG   <package.name> <AID hex> [major] [minor]
+#    CLASS <classToken> <internal/class/Name> [SIZE <cells>]
+#    V     <virtualToken> <name(descriptor)ret>
+#    S     <staticToken>  <name(descriptor)ret>
+#
+#  SIZE is the number of 16 bit instance cells the class contributes to a
+#  subclass. Applet has no instance fields, so applet field tokens start at 0.
+# ---------------------------------------------------------------------------
+
+PKG java.lang A0000000620001 1 0
+
+CLASS 0 java/lang/Object SIZE 0
+  S 0 <init>()V
+
+CLASS 1 java/lang/Throwable SIZE 0
+  S 0 <init>()V
+
+CLASS 2 java/lang/Exception SIZE 0
+  S 0 <init>()V
+
+
+PKG javacard.framework A0000000620101 1 3
+
+CLASS 0 javacard/framework/AID SIZE 0
+  V 0 getBytes([BS)B
+  V 1 equals(Ljava/lang/Object;)Z
+  V 2 equals([BSB)Z
+  V 3 partialEquals([BSB)Z
+  V 4 RIDEquals(Ljavacard/framework/AID;)Z
+
+CLASS 1 javacard/framework/APDU SIZE 0
+  V 0  getBuffer()[B
+  V 1  setIncomingAndReceive()S
+  V 2  setOutgoing()S
+  V 3  setOutgoingNoChaining()S
+  V 4  setOutgoingLength(S)V
+  V 5  receiveBytes(S)S
+  V 6  sendBytes(SS)V
+  V 7  sendBytesLong([BSS)V
+  V 8  setOutgoingAndSend(SS)V
+  V 9  getProtocol()B
+  V 10 getNAD()B
+  V 11 waitExtension()V
+  V 15 getIncomingLength()S
+  V 16 getOffsetCdata()S
+
+CLASS 2 javacard/framework/APDUException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 3 javacard/framework/Applet SIZE 0
+  V 0 select()Z
+  V 1 process(Ljavacard/framework/APDU;)V
+  V 2 deselect()V
+  V 3 getShareableInterfaceObject(Ljavacard/framework/AID;B)Ljavacard/framework/Shareable;
+  V 4 register()V
+  V 5 register([BSB)V
+  V 6 selectingApplet()Z
+  S 0 <init>()V
+
+CLASS 4 javacard/framework/CardException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 5 javacard/framework/CardRuntimeException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 8 javacard/framework/ISOException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 9 javacard/framework/JCSystem SIZE 0
+  S 0  isTransient(Ljava/lang/Object;)B
+  S 1  makeTransientBooleanArray(SB)[Z
+  S 2  makeTransientByteArray(SB)[B
+  S 3  makeTransientShortArray(SB)[S
+  S 4  makeTransientObjectArray(SB)[Ljava/lang/Object;
+  S 5  beginTransaction()V
+  S 6  abortTransaction()V
+  S 7  commitTransaction()V
+  S 8  getTransactionDepth()B
+  S 9  getUnusedCommitCapacity()S
+  S 10 getMaxCommitCapacity()S
+  S 11 getAID()Ljavacard/framework/AID;
+  S 12 lookupAID([BSB)Ljavacard/framework/AID;
+  S 13 getPreviousContextAID()Ljavacard/framework/AID;
+  S 14 getAvailableMemory(B)S
+  S 15 getVersion()S
+
+CLASS 12 javacard/framework/OwnerPIN SIZE 0
+  V 0 getTriesRemaining()B
+  V 1 check([BSB)Z
+  V 2 isValidated()Z
+  V 3 reset()V
+  V 4 update([BSB)V
+  V 5 resetAndUnblock()V
+  S 0 <init>(BB)V
+
+CLASS 13 javacard/framework/PINException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 14 javacard/framework/SystemException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 15 javacard/framework/Util SIZE 0
+  S 0 arrayCopy([BS[BSS)S
+  S 1 arrayCopyNonAtomic([BS[BSS)S
+  S 2 arrayFillNonAtomic([BSSB)S
+  S 3 arrayCompare([BS[BSS)B
+  S 4 makeShort(BB)S
+  S 5 getShort([BS)S
+  S 6 setShort([BSS)S
+
+CLASS 16 javacard/framework/UserException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
+
+CLASS 17 javacard/framework/TransactionException SIZE 0
+  V 0 getReason()S
+  V 1 setReason(S)V
+  S 0 <init>(S)V
+  S 1 throwIt(S)V
